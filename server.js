@@ -5,6 +5,7 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
+const puppeteer = require('puppeteer');
 
 const app = express();
 
@@ -17,7 +18,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 // CORS middleware setup
 app.use(
   cors({
-    origin: ['https://frontendsplitscreen.vercel.app', 'http://localhost:3000','https://split-screen-inky.vercel.app'],
+    origin: ['https://frontendsplitscreen.vercel.app', 'http://localhost:3000', 'https://split-screen-inky.vercel.app'],
     methods: ['GET', 'POST', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true,
@@ -347,15 +348,22 @@ app.get('/api/proxy', async (req, res) => {
         $('section[itemprop="abstract"] p').text().trim() ||
         $('abstract').text().trim() ||
         $('div.abstract-text').text().trim();
-      const inventors =
-        $('span[itemprop="inventor"]')
-          .map((i, el) => $(el).text().trim())
-          .get() ||
+      const inventors = $('[itemprop="inventor"]')
+        .map((i, el) => {
+          const name = $(el).text().trim();
+          return name ? name : null;
+        })
+        .get()
+        .filter(name => name !== null) ||
         $('dd[itemprop="inventor"]')
           .map((i, el) => $(el).text().trim())
           .get() ||
         $('meta[name="DC.contributor"]')
-          .map((i, el) => $(el).attr('content').trim())
+          .map((i, el) => $(el).attr('content')?.trim())
+          .get() ||
+        $('span.patent-bibdata-value')
+          .filter((i, el) => $(el).prev('span.patent-bibdata-label').text().toLowerCase().includes('inventor'))
+          .map((i, el) => $(el).text().trim())
           .get();
       const publicationNumberRaw =
         $('span[itemprop="publicationNumber"]').text().trim() ||
@@ -369,8 +377,6 @@ app.get('/api/proxy', async (req, res) => {
         publicationNumber?.match(/[A-Z]{2}[0-9A-Z]+/g)?.join(', ') ||
         publicationNumber;
 
-
-      // Updated publication date logic
       const publicationDateRaw =
         $('time[itemprop="publicationDate"]').text().trim() ||
         $('span[itemprop="publicationDate"]').text().trim() ||
@@ -395,6 +401,14 @@ app.get('/api/proxy', async (req, res) => {
         $('time[itemprop="priorityDate"]').text().trim() ||
         $('span[itemprop="priorityDate"]').text().trim() ||
         $('div.priority-date').text().trim();
+
+      const applicationNumberRaw =
+        $('span[itemprop="applicationNumber"]').text().trim() ||
+        $('dd[itemprop="applicationNumber"]').text().trim() ||
+        $('meta[name="DC.identifier"]').attr('content')?.trim() ||
+        targetUrl.match(/US\d+/)?.[0];
+      const applicationNumber = applicationNumberRaw || 'Unknown';
+      console.log(`Extracted Application Number: ${applicationNumber}`);
 
       const classifications = $('span[itemprop="cpcs"]')
         .map((i, el) => {
@@ -464,30 +478,156 @@ app.get('/api/proxy', async (req, res) => {
         })
         .get();
 
-      const patentFamily = $('tr[itemprop="family"]')
-        .map((i, el) => {
-          const number =
-            $(el).find('td[itemprop="publicationNumber"]').text().trim() ||
-            $(el).find('td:nth-child(1)').text().trim();
-          const date =
-            $(el).find('time[itemprop="publicationDate"]').text().trim() ||
-            $(el).find('td[itemprop="publicationDate"]').text().trim() ||
-            $(el).find('td:nth-child(2)').text().trim();
-          const country =
-            $(el).find('td[itemprop="country"]').text().trim() ||
-            $(el).find('td:nth-child(3)').text().trim();
-          return { number, date, country };
-        })
-        .get();
+      // Scrape Patent Family (Worldwide Applications) using Cheerio
+      const patentFamilyHeader = $('div.header.style-scope.application-timeline').filter((i, el) =>
+        $(el).text().trim().includes('Worldwide applications')
+      );
+      console.log(`Patent Family Header Found: ${patentFamilyHeader.length > 0 ? 'Yes' : 'No'}`);
+      console.log(`Patent Family Header Text: ${patentFamilyHeader.text().trim()}`);
 
-      // Image Scraping Logic (already updated in previous response)
+      const patentFamily = patentFamilyHeader.length > 0
+        ? patentFamilyHeader
+            .nextUntil('hr.style-scope.application-timeline', 'div.event.style-scope.application-timeline')
+            .find('span.block.style-scope.application-timeline')
+            .map((i, block) => {
+              const year = $(block).find('span.year.style-scope.application-timeline').text().trim();
+              console.log(`Patent Family Year ${i + 1}: ${year}`);
+
+              const applications = $(block)
+                .find('state-modifier')
+                .map((j, stateModifier) => {
+                  const country = $(stateModifier).find('span#cc').text().trim();
+                  const tooltip = $(stateModifier).next('overlay-tooltip');
+                  
+                  const number = tooltip.find('div:contains("Application number:")').text().replace('Application number:', '').trim();
+                  const date = tooltip.find('div:contains("Filing date:")').text().replace('Filing date:', '').trim();
+                  const legalStatus = tooltip.find('div:contains("Legal status:")').text().replace('Legal status:', '').trim();
+
+                  console.log(`Application ${j + 1} for Year ${year} - Country: ${country}, Number: ${number}, Date: ${date}, Status: ${legalStatus}`);
+                  
+                  return { country, number, date, legalStatus };
+                })
+                .get()
+                .filter(app => app.country && app.number && app.date && app.legalStatus);
+
+              return applications.length > 0 ? { year, applications } : null;
+            })
+            .get()
+            .filter(item => item !== null)
+        : [];
+
+      console.log(`Extracted Patent Family: ${JSON.stringify(patentFamily, null, 2)}`);
+
+      // Scrape Application Events using Puppeteer
+      let applicationEvents = [];
+      try {
+        console.log('Launching Puppeteer...');
+        const browser = await puppeteer.launch({
+          headless: true,
+          args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--no-first-run',
+            '--no-zygote',
+            '--single-process',
+            '--disable-gpu',
+          ],
+        });
+        const page = await browser.newPage();
+
+        // Set user agent to mimic a real browser
+        await page.setUserAgent(
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        );
+
+        console.log(`Navigating to ${targetUrl}...`);
+        await page.goto(targetUrl, {
+          waitUntil: 'networkidle2',
+          timeout: 60000,
+        });
+
+        console.log('Waiting for Application Events section to load...');
+        await page.waitForSelector('div.header.style-scope.application-timeline', { timeout: 30000 });
+
+        // Extract Application Events
+        applicationEvents = await page.evaluate(() => {
+          const events = [];
+
+          // Find the header for Application Events
+          const headers = Array.from(document.querySelectorAll('div.header.style-scope.application-timeline'));
+          const eventsHeader = headers.find(header =>
+            header.textContent.trim().startsWith('Application') && header.textContent.trim().includes('events')
+          );
+
+          if (!eventsHeader) {
+            console.log('Application Events header not found');
+            return events;
+          }
+
+          console.log('Application Events header found:', eventsHeader.textContent.trim());
+
+          // Find all event elements following the header
+          let currentElement = eventsHeader.nextElementSibling;
+          const eventElements = [];
+          
+          while (currentElement) {
+            if (currentElement.tagName.toLowerCase() === 'hr') break; // Stop at the next section (hr separator)
+            if (currentElement.classList.contains('event') &&
+                currentElement.classList.contains('layout') &&
+                currentElement.classList.contains('horizontal') &&
+                currentElement.classList.contains('style-scope') &&
+                currentElement.classList.contains('application-timeline')) {
+              eventElements.push(currentElement);
+            }
+            currentElement = currentElement.nextElementSibling;
+          }
+
+          console.log(`Found ${eventElements.length} Application Events`);
+
+          // Extract date and title from each event
+          eventElements.forEach((eventElement, index) => {
+            // Possible classes for date
+            const dateClasses = ['filed', 'reassignment', 'publication', 'granted', 'legal-status'];
+            let date = '';
+            
+            for (const dateClass of dateClasses) {
+              const dateElement = eventElement.querySelector(`div.${dateClass}.style-scope.application-timeline`);
+              if (dateElement) {
+                date = dateElement.textContent.trim();
+                break;
+              }
+            }
+
+            // Extract title
+            const titleElement = eventElement.querySelector('span.title-text.style-scope.application-timeline');
+            const title = titleElement ? titleElement.textContent.trim() : '';
+
+            console.log(`Event ${index + 1} - Date: ${date}, Title: ${title}`);
+
+            if (date && title) {
+              events.push({ date, title });
+            }
+          });
+
+          return events;
+        });
+
+        console.log('Extracted Application Events:', JSON.stringify(applicationEvents, null, 2));
+
+        await browser.close();
+      } catch (error) {
+        console.error('Puppeteer Error:', error.message);
+        applicationEvents = [];
+      }
+
       const drawingsFromCarousel = [];
       $('meta[itemprop="full"]').each((i, elem) => {
         const content = $(elem).attr('content');
         if (content) drawingsFromCarousel.push(content);
       });
       console.log('Extracted images:', drawingsFromCarousel);
-
 
       const claims =
         $('section[itemprop="claims"]').html() ||
@@ -639,8 +779,9 @@ app.get('/api/proxy', async (req, res) => {
           citedBy,
           legalEvents,
           patentFamily,
-          drawings: [], // Keeping the old drawings field empty for now
-          drawingsFromCarousel, // New field for constructed image URLs
+          applicationEvents,
+          drawings: [],
+          drawingsFromCarousel,
           claims,
           description,
           similarDocs,
