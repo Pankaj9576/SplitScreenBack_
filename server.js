@@ -1,11 +1,11 @@
 const express = require('express');
 const fetch = require('node-fetch');
 const cheerio = require('cheerio');
+const puppeteer = require('puppeteer');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
-const puppeteer = require('puppeteer');
 
 const app = express();
 
@@ -304,19 +304,25 @@ app.get('/api/proxy', async (req, res) => {
 
   const fetchHeaders = {
     'User-Agent':
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
     Accept:
-      'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.5',
+      'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+    'Accept-Language': 'en-US,en;q=0.9',
     Referer: 'https://patents.google.com/',
     Connection: 'keep-alive',
     'Upgrade-Insecure-Requests': '1',
+    'Accept-Encoding': 'gzip, deflate, br, zstd',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'same-origin',
+    'Sec-Fetch-User': '?1',
   };
 
   try {
     const response = await fetch(targetUrl, {
       headers: fetchHeaders,
       redirect: 'follow',
+      timeout: 30000, // 30 seconds timeout
     });
 
     if (!response.ok) {
@@ -478,7 +484,7 @@ app.get('/api/proxy', async (req, res) => {
         })
         .get();
 
-      // Scrape Patent Family (Worldwide Applications) using Cheerio
+      // Scrape Patent Family (Worldwide Applications)
       const patentFamilyHeader = $('div.header.style-scope.application-timeline').filter((i, el) =>
         $(el).text().trim().includes('Worldwide applications')
       );
@@ -520,10 +526,11 @@ app.get('/api/proxy', async (req, res) => {
 
       // Scrape Application Events using Puppeteer
       let applicationEvents = [];
+      let browser;
       try {
-        console.log('Launching Puppeteer...');
-        const browser = await puppeteer.launch({
-          headless: true,
+        console.log('Launching Puppeteer browser...');
+        browser = await puppeteer.launch({
+          headless: 'new',
           args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -534,92 +541,69 @@ app.get('/api/proxy', async (req, res) => {
             '--single-process',
             '--disable-gpu',
           ],
+          timeout: 60000, // 60 seconds timeout for launching browser
         });
+
         const page = await browser.newPage();
 
-        // Set user agent to mimic a real browser
+        // Set user agent to avoid detection
         await page.setUserAgent(
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
         );
 
         console.log(`Navigating to ${targetUrl}...`);
         await page.goto(targetUrl, {
-          waitUntil: 'networkidle2',
-          timeout: 60000,
+          waitUntil: 'domcontentloaded',
+          timeout: 60000, // 60 seconds timeout for navigation
         });
 
-        console.log('Waiting for Application Events section to load...');
-        await page.waitForSelector('div.header.style-scope.application-timeline', { timeout: 30000 });
+        console.log('Waiting for Application Events header...');
+        await page.waitForSelector('div.header.style-scope.application-timeline', {
+          timeout: 30000, // 30 seconds timeout for selector
+        });
 
-        // Extract Application Events
         applicationEvents = await page.evaluate(() => {
           const events = [];
-
-          // Find the header for Application Events
           const headers = Array.from(document.querySelectorAll('div.header.style-scope.application-timeline'));
           const eventsHeader = headers.find(header =>
             header.textContent.trim().startsWith('Application') && header.textContent.trim().includes('events')
           );
+          if (!eventsHeader) return events;
 
-          if (!eventsHeader) {
-            console.log('Application Events header not found');
-            return events;
-          }
+          console.log(`Found Events Header: ${eventsHeader.textContent.trim()}`);
 
-          console.log('Application Events header found:', eventsHeader.textContent.trim());
-
-          // Find all event elements following the header
-          let currentElement = eventsHeader.nextElementSibling;
-          const eventElements = [];
-          
-          while (currentElement) {
-            if (currentElement.tagName.toLowerCase() === 'hr') break; // Stop at the next section (hr separator)
-            if (currentElement.classList.contains('event') &&
-                currentElement.classList.contains('layout') &&
-                currentElement.classList.contains('horizontal') &&
-                currentElement.classList.contains('style-scope') &&
-                currentElement.classList.contains('application-timeline')) {
-              eventElements.push(currentElement);
-            }
-            currentElement = currentElement.nextElementSibling;
-          }
-
-          console.log(`Found ${eventElements.length} Application Events`);
-
-          // Extract date and title from each event
-          eventElements.forEach((eventElement, index) => {
-            // Possible classes for date
-            const dateClasses = ['filed', 'reassignment', 'publication', 'granted', 'legal-status'];
-            let date = '';
-            
-            for (const dateClass of dateClasses) {
-              const dateElement = eventElement.querySelector(`div.${dateClass}.style-scope.application-timeline`);
-              if (dateElement) {
-                date = dateElement.textContent.trim();
-                break;
+          let current = eventsHeader.nextElementSibling;
+          let eventCount = 0;
+          while (current && current.tagName.toLowerCase() !== 'hr') {
+            if (current.classList.contains('event')) {
+              eventCount++;
+              const dateElement = current.querySelector(
+                'div.filed, div.reassignment, div.publication, div.granted, div.legal-status'
+              );
+              const titleElement = current.querySelector('span.title-text');
+              const date = dateElement?.textContent.trim() ?? '';
+              const title = titleElement?.textContent.trim() ?? '';
+              if (date && title) {
+                console.log(`Event ${eventCount} - Date: ${date}, Title: ${title}`);
+                events.push({ date, title });
               }
             }
+            current = current.nextElementSibling;
+          }
 
-            // Extract title
-            const titleElement = eventElement.querySelector('span.title-text.style-scope.application-timeline');
-            const title = titleElement ? titleElement.textContent.trim() : '';
-
-            console.log(`Event ${index + 1} - Date: ${date}, Title: ${title}`);
-
-            if (date && title) {
-              events.push({ date, title });
-            }
-          });
-
+          console.log(`Found ${eventCount} Application Events`);
           return events;
         });
 
-        console.log('Extracted Application Events:', JSON.stringify(applicationEvents, null, 2));
-
-        await browser.close();
+        console.log(`Extracted Application Events: ${JSON.stringify(applicationEvents, null, 2)}`);
       } catch (error) {
         console.error('Puppeteer Error:', error.message);
         applicationEvents = [];
+      } finally {
+        if (browser) {
+          console.log('Closing Puppeteer browser...');
+          await browser.close();
+        }
       }
 
       const drawingsFromCarousel = [];
