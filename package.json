@@ -12,6 +12,7 @@
   "license": "ISC",
   "dependencies": {
     "@sparticuz/chromium": "^133.0.0",
+    "axios": "^1.9.0",
     "bcryptjs": "^2.4.3",
     "bottleneck": "^2.19.5",
     "cheerio": "^1.0.0",
