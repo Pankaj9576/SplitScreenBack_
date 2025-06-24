@@ -4,12 +4,14 @@ const cheerio = require('cheerio');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const crypto = require('crypto');
 const mongoose = require('mongoose');
-const scrapeEspacenetPatent = require('./scrapeEspacenetPatent');
+const sgMail = require('@sendgrid/mail');
 require('dotenv').config();
 
 const app = express();
+
+// Set SendGrid API Key
+sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 // Validate environment variables
 if (!process.env.JWT_SECRET) {
@@ -19,6 +21,16 @@ if (!process.env.JWT_SECRET) {
 
 if (!process.env.MONGODB_URI) {
   console.error('Error: MONGODB_URI is not defined in .env');
+  process.exit(1);
+}
+
+if (!process.env.SENDGRID_API_KEY) {
+  console.error('Error: SENDGRID_API_KEY is not defined in .env');
+  process.exit(1);
+}
+
+if (!process.env.FROM_EMAIL) {
+  console.error('Error: FROM_EMAIL is not defined in .env');
   process.exit(1);
 }
 
@@ -124,28 +136,56 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// Forgot Password endpoint
-app.post('/api/forgot-password', async (req, res) => {
-  const { email } = req.body;
-  if (!email) {
-    return res.status(400).json({ error: 'Email is required' });
-  }
-  try {
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    const resetToken = crypto.randomBytes(20).toString('hex');
-    user.resetToken = resetToken;
-    user.resetTokenExpiry = Date.now() + 3600000;
-    await user.save();
-    console.log(`Reset Token for ${email}: ${resetToken}`);
-    res.status(200).json({ message: 'Reset token generated. Check server logs for the token.' });
-  } catch (err) {
-    console.error('Forgot password error:', err);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
+// Replace the existing /api/forgot-password endpoint with this
+     app.post('/api/forgot-password', async (req, res) => {
+       const { email } = req.body;
+       if (!email) {
+         return res.status(400).json({ error: 'Email is required' });
+       }
+       try {
+         const user = await User.findOne({ email });
+         if (!user) {
+           return res.status(404).json({ error: 'User not found' });
+         }
+
+         // Generate JWT token for password reset
+         const resetToken = jwt.sign({ userId: user._id, email }, process.env.JWT_SECRET, { expiresIn: '1h' });
+
+         // Store token in database (optional, for additional validation)
+         user.resetToken = resetToken;
+         user.resetTokenExpiry = Date.now() + 3600000; // 1 hour expiry
+         await user.save();
+
+         // Create reset link
+         const resetLink = `${process.env.NODE_ENV === 'production' 
+           ? 'https://split-screen-inky.vercel.app' 
+           : 'http://localhost:3000'}/reset-password?token=${encodeURIComponent(resetToken)}&email=${encodeURIComponent(email)}`;
+
+         // Send email using SendGrid
+         const msg = {
+           to: email,
+           from: process.env.FROM_EMAIL,
+           subject: 'Password Reset Request',
+           html: `
+             <p>Hello,</p>
+             <p>You requested a password reset. Click the link below to reset your password:</p>
+             <p><a href="${resetLink}">Reset Password</a></p>
+             <p>This link will expire in 1 hour.</p>
+             <p>If you did not request this, please ignore this email.</p>
+           `,
+         };
+
+         await sgMail.send(msg);
+         console.log(`Password reset email sent to ${email}`);
+         res.status(200).json({ message: 'Password reset link sent to your email' });
+       } catch (err) {
+         console.error('Forgot password error:', err);
+         if (err.response) {
+           console.error('SendGrid response:', err.response.body); // Log detailed SendGrid error
+         }
+         res.status(500).json({ error: 'Failed to send reset email' });
+       }
+     });
 
 // Reset Password endpoint
 app.post('/api/reset-password', async (req, res) => {
@@ -154,19 +194,29 @@ app.post('/api/reset-password', async (req, res) => {
     return res.status(400).json({ error: 'Email, token, and new password are required' });
   }
   try {
-    const user = await User.findOne({ email });
-    if (!user || user.resetToken !== token || Date.now() > user.resetTokenExpiry) {
+    // Verify JWT token
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (decoded.email !== email || !decoded.userId) {
       return res.status(400).json({ error: 'Invalid or expired reset token' });
     }
+
+    // Find user
+    const user = await User.findOne({ _id: decoded.userId, email });
+    if (!user || (user.resetToken && user.resetToken !== token) || (user.resetTokenExpiry && Date.now() > user.resetTokenExpiry)) {
+      return res.status(400).json({ error: 'Invalid or expired reset token' });
+    }
+
+    // Hash new password
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     user.password = hashedPassword;
     user.resetToken = undefined;
     user.resetTokenExpiry = undefined;
     await user.save();
+
     res.status(200).json({ message: 'Password reset successful' });
   } catch (err) {
     console.error('Reset password error:', err);
-    res.status(500).json({ error: 'Server error' });
+    res.status(400).json({ error: 'Invalid or expired reset token' });
   }
 });
 
@@ -430,7 +480,7 @@ app.get('/api/proxy', async (req, res) => {
         console.log('Extracted images:', drawingsFromCarousel);
 
         const claims = $('section[itemprop="claims"]').html() || $('div.claims').html() || $('div#claims').html() || '';
-        const description = $('section[itemprop="description"]').html() || $('div.description').html() || $('div#description').html() || '';
+      const description = $('section[itemprop="description"]').html() || $('div.description').html() || $('div#description').html() || '';
         const similarDocs = $('tr[itemprop="similarDocuments"]').map((i, el) => {
           const number = $(el).find('td[itemprop="publicationNumber"]').text().trim() || $(el).find('td:nth-child(1)').text().trim();
           const date = $(el).find('time[itemprop="publicationDate"]').text().trim() || $(el).find('td[itemprop="publicationDate"]').text().trim() || $(el).find('td:nth-child(2)').text().trim();
