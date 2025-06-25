@@ -34,7 +34,7 @@ if (!process.env.FROM_EMAIL) {
   process.exit(1);
 }
 
-// MongoDB Connection
+// MongoDB Connection.....
 mongoose.connect(`${process.env.MONGODB_URI}/SplitScreenDatabase`, {
   serverSelectionTimeoutMS: 5000,
   heartbeatFrequencyMS: 10000,
