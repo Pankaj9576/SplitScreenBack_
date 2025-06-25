@@ -136,56 +136,51 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// Replace the existing /api/forgot-password endpoint with this
-     app.post('/api/forgot-password', async (req, res) => {
-       const { email } = req.body;
-       if (!email) {
-         return res.status(400).json({ error: 'Email is required' });
-       }
-       try {
-         const user = await User.findOne({ email });
-         if (!user) {
-           return res.status(404).json({ error: 'User not found' });
-         }
+app.post('/api/forgot-password', async (req, res) => {
+  const { email } = req.body;
+  if (!email) {
+    return res.status(400).json({ error: 'Email is required' });
+  }
+  try {
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
 
-         // Generate JWT token for password reset
-         const resetToken = jwt.sign({ userId: user._id, email }, process.env.JWT_SECRET, { expiresIn: '1h' });
+    const resetToken = jwt.sign({ userId: user._id, email }, process.env.JWT_SECRET, { expiresIn: '1h' });
+    user.resetToken = resetToken;
+    user.resetTokenExpiry = Date.now() + 3600000; // 1 hour expiry
+    await user.save();
 
-         // Store token in database (optional, for additional validation)
-         user.resetToken = resetToken;
-         user.resetTokenExpiry = Date.now() + 3600000; // 1 hour expiry
-         await user.save();
+    const resetLink = `${process.env.NODE_ENV === 'production' 
+      ? 'https://split-screen-inky.vercel.app' 
+      : 'http://localhost:3000'}/reset-password?token=${encodeURIComponent(resetToken)}&email=${encodeURIComponent(email)}`;
+    console.log('Generated reset link:', resetLink); // Debug log
 
-         // Create reset link
-         const resetLink = `${process.env.NODE_ENV === 'production' 
-           ? 'https://split-screen-inky.vercel.app' 
-           : 'http://localhost:3000'}/reset-password?token=${encodeURIComponent(resetToken)}&email=${encodeURIComponent(email)}`;
+    const msg = {
+      to: email,
+      from: process.env.FROM_EMAIL,
+      subject: 'Password Reset Request',
+      html: `
+        <p>Hello,</p>
+        <p>You requested a password reset. Click the link below to reset your password:</p>
+        <p><a href="${resetLink}">Reset Password</a></p>
+        <p>This link will expire in 1 hour.</p>
+        <p>If you did not request this, please ignore this email.</p>
+      `,
+    };
 
-         // Send email using SendGrid
-         const msg = {
-           to: email,
-           from: process.env.FROM_EMAIL,
-           subject: 'Password Reset Request',
-           html: `
-             <p>Hello,</p>
-             <p>You requested a password reset. Click the link below to reset your password:</p>
-             <p><a href="${resetLink}">Reset Password</a></p>
-             <p>This link will expire in 1 hour.</p>
-             <p>If you did not request this, please ignore this email.</p>
-           `,
-         };
-
-         await sgMail.send(msg);
-         console.log(`Password reset email sent to ${email}`);
-         res.status(200).json({ message: 'Password reset link sent to your email' });
-       } catch (err) {
-         console.error('Forgot password error:', err);
-         if (err.response) {
-           console.error('SendGrid response:', err.response.body); // Log detailed SendGrid error
-         }
-         res.status(500).json({ error: 'Failed to send reset email' });
-       }
-     });
+    await sgMail.send(msg);
+    console.log(`Password reset email sent to ${email}`);
+    res.status(200).json({ message: 'Password reset link sent to your email' });
+  } catch (err) {
+    console.error('Forgot password error:', err);
+    if (err.response) {
+      console.error('SendGrid response:', err.response.body);
+    }
+    res.status(500).json({ error: 'Failed to send reset email' });
+  }
+});
 
 // Reset Password endpoint
 app.post('/api/reset-password', async (req, res) => {
