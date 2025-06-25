@@ -40,7 +40,7 @@ mongoose.connect(`${process.env.MONGODB_URI}/SplitScreenDatabase`, {
   heartbeatFrequencyMS: 10000,
 })
   .then(() => console.log('MongoDB Connected'))
-  .catch(err => console.error('MongoDB Connection Error:', err.message));
+  .catch(err => console.error('MongoDB Connection Error:', err));
 
 // User Schema
 const userSchema = new mongoose.Schema({
@@ -54,7 +54,9 @@ const User = mongoose.model('User', userSchema);
 
 // CORS configuration
 app.use(cors({
-  origin: ['https://split-screen-inky.vercel.app', 'http://localhost:3000'],
+  origin: process.env.NODE_ENV === 'production'
+    ? 'https://split-screen-inky.vercel.app'
+    : ['http://localhost:3000', 'https://split-screen-inky.vercel.app'],
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
@@ -134,80 +136,84 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// Forgot Password endpoint
-app.post('/api/forgot-password', async (req, res) => {
-  const { email } = req.body;
-  if (!email) {
-    return res.status(400).json({ error: 'Email is required' });
-  }
-  try {
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
+// Replace the existing /api/forgot-password endpoint with this
+     app.post('/api/forgot-password', async (req, res) => {
+       const { email } = req.body;
+       if (!email) {
+         return res.status(400).json({ error: 'Email is required' });
+       }
+       try {
+         const user = await User.findOne({ email });
+         if (!user) {
+           return res.status(404).json({ error: 'User not found' });
+         }
 
-    const resetToken = jwt.sign({ userId: user._id, email }, process.env.JWT_SECRET, { expiresIn: '1h' });
-    user.resetToken = resetToken;
-    user.resetTokenExpiry = Date.now() + 3600000; // 1 hour expiry
-    await user.save();
-    console.log('Generated reset token:', resetToken); // Debug log
+         // Generate JWT token for password reset
+         const resetToken = jwt.sign({ userId: user._id, email }, process.env.JWT_SECRET, { expiresIn: '1h' });
 
-    const resetLink = `${process.env.NODE_ENV === 'production' 
-      ? 'https://split-screen-inky.vercel.app' 
-      : 'http://localhost:3000'}/reset-password?token=${encodeURIComponent(resetToken)}&email=${encodeURIComponent(email)}`;
-    console.log('Generated reset link:', resetLink); // Debug log
+         // Store token in database (optional, for additional validation)
+         user.resetToken = resetToken;
+         user.resetTokenExpiry = Date.now() + 3600000; // 1 hour expiry
+         await user.save();
 
-    const msg = {
-      to: email,
-      from: process.env.FROM_EMAIL,
-      subject: 'Password Reset Request',
-      html: `
-        <p>Hello,</p>
-        <p>You requested a password reset. Click the link below to reset your password:</p>
-        <p><a href="${resetLink}">Reset Password</a></p>
-        <p>This link will expire in 1 hour.</p>
-        <p>If you did not request this, please ignore this email.</p>
-      `,
-    };
+         // Create reset link
+         const resetLink = `${process.env.NODE_ENV === 'production' 
+           ? 'https://split-screen-inky.vercel.app' 
+           : 'http://localhost:3000'}/reset-password?token=${encodeURIComponent(resetToken)}&email=${encodeURIComponent(email)}`;
 
-    await sgMail.send(msg);
-    console.log(`Password reset email sent to ${email}`);
-    res.status(200).json({ message: 'Password reset link sent to your email' });
-  } catch (err) {
-    console.error('Forgot password error:', err);
-    if (err.response) {
-      console.error('SendGrid response:', err.response.body);
-    }
-    res.status(500).json({ error: 'Failed to send reset email' });
-  }
-});
+         // Send email using SendGrid
+         const msg = {
+           to: email,
+           from: process.env.FROM_EMAIL,
+           subject: 'Password Reset Request',
+           html: `
+             <p>Hello,</p>
+             <p>You requested a password reset. Click the link below to reset your password:</p>
+             <p><a href="${resetLink}">Reset Password</a></p>
+             <p>This link will expire in 1 hour.</p>
+             <p>If you did not request this, please ignore this email.</p>
+           `,
+         };
+
+         await sgMail.send(msg);
+         console.log(`Password reset email sent to ${email}`);
+         res.status(200).json({ message: 'Password reset link sent to your email' });
+       } catch (err) {
+         console.error('Forgot password error:', err);
+         if (err.response) {
+           console.error('SendGrid response:', err.response.body); // Log detailed SendGrid error
+         }
+         res.status(500).json({ error: 'Failed to send reset email' });
+       }
+     });
 
 // Reset Password endpoint
 app.post('/api/reset-password', async (req, res) => {
+  await getMongooseConnection(); // Ensure MongoDB is connected
   const { email, token, newPassword } = req.body;
   if (!email || !token || !newPassword) {
     return res.status(400).json({ error: 'Email, token, and new password are required' });
   }
   try {
-    console.log('Received reset request - Email:', email, 'Token:', token); // Debug log
+    // Verify JWT token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     console.log('Decoded token payload:', decoded); // Debug log
-
     if (decoded.email !== email) {
       return res.status(400).json({ error: 'Email mismatch in token' });
     }
 
+    // Find user
     const user = await User.findOne({ _id: decoded.userId, email });
     if (!user || !user.resetToken || user.resetToken !== token || (user.resetTokenExpiry && Date.now() > user.resetTokenExpiry)) {
       return res.status(400).json({ error: 'Invalid or expired reset token' });
     }
 
+    // Hash new password
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     user.password = hashedPassword;
     user.resetToken = undefined;
     user.resetTokenExpiry = undefined;
     await user.save();
-    console.log('Password reset successful for email:', email);
 
     res.status(200).json({ message: 'Password reset successful' });
   } catch (err) {
@@ -479,7 +485,7 @@ app.get('/api/proxy', async (req, res) => {
         console.log('Extracted images:', drawingsFromCarousel);
 
         const claims = $('section[itemprop="claims"]').html() || $('div.claims').html() || $('div#claims').html() || '';
-        const description = $('section[itemprop="description"]').html() || $('div.description').html() || $('div#description').html() || '';
+      const description = $('section[itemprop="description"]').html() || $('div.description').html() || $('div#description').html() || '';
         const similarDocs = $('tr[itemprop="similarDocuments"]').map((i, el) => {
           const number = $(el).find('td[itemprop="publicationNumber"]').text().trim() || $(el).find('td:nth-child(1)').text().trim();
           const date = $(el).find('time[itemprop="publicationDate"]').text().trim() || $(el).find('td[itemprop="publicationDate"]').text().trim() || $(el).find('td:nth-child(2)').text().trim();
