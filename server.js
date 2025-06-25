@@ -28,7 +28,7 @@ if (!process.env.SENDGRID_API_KEY) {
   console.error('Error: SENDGRID_API_KEY is not defined in .env');
   process.exit(1);
 }
-
+//
 if (!process.env.FROM_EMAIL) {
   console.error('Error: FROM_EMAIL is not defined in .env');
   process.exit(1);
