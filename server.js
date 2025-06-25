@@ -152,9 +152,10 @@ app.post('/api/forgot-password', async (req, res) => {
     await user.save();
     console.log('Generated reset token:', resetToken); // Debug log
 
-const resetLink = `https://split-screen-inky.vercel.app/reset-password?token=${encodeURIComponent(resetToken)}&email=${encodeURIComponent(email)}`;
-console.log('Generated reset link:', resetLink); // Debug log
-
+    const resetLink = `${process.env.NODE_ENV === 'production' 
+      ? 'https://split-screen-inky.vercel.app' 
+      : 'http://localhost:3000'}/reset-password?token=${encodeURIComponent(resetToken)}&email=${encodeURIComponent(email)}`;
+    console.log('Generated reset link:', resetLink); // Debug log
 
     const msg = {
       to: email,
