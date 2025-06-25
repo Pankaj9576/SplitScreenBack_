@@ -195,33 +195,30 @@ app.post('/api/reset-password', async (req, res) => {
     return res.status(400).json({ error: 'Email, token, and new password are required' });
   }
   try {
-    // Verify JWT token
+    console.log('Reset Password Request:', { email, tokenLength: token.length });
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    console.log('Decoded token payload:', decoded); // Debug log
-    if (decoded.email !== email) {
-      return res.status(400).json({ error: 'Email mismatch in token' });
-    }
-
-    // Find user
-    const user = await User.findOne({ _id: decoded.userId, email });
-    if (!user || !user.resetToken || user.resetToken !== token || (user.resetTokenExpiry && Date.now() > user.resetTokenExpiry)) {
+    console.log('Decoded Token:', decoded);
+    if (decoded.email !== email || !decoded.userId) {
+      console.log('Token Validation Failed: Email mismatch or missing userId');
       return res.status(400).json({ error: 'Invalid or expired reset token' });
     }
 
-    // Hash new password
+    const user = await User.findOne({ _id: decoded.userId, email });
+    if (!user || (user.resetToken && user.resetToken !== token) || (user.resetTokenExpiry && Date.now() > user.resetTokenExpiry)) {
+      console.log('User Validation Failed:', { userExists: !!user, resetTokenMatch: user?.resetToken === token, expiryValid: user?.resetTokenExpiry && Date.now() <= user.resetTokenExpiry });
+      return res.status(400).json({ error: 'Invalid or expired reset token' });
+    }
+
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     user.password = hashedPassword;
     user.resetToken = undefined;
     user.resetTokenExpiry = undefined;
     await user.save();
-
+    console.log('Password Reset Successful for:', email);
     res.status(200).json({ message: 'Password reset successful' });
   } catch (err) {
     console.error('Reset password error:', err);
-    if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
-      return res.status(400).json({ error: 'Invalid or expired reset token' });
-    }
-    res.status(500).json({ error: 'Server error' });
+    res.status(400).json({ error: 'Invalid or expired reset token' });
   }
 });
 
