@@ -18,14 +18,17 @@ if (!process.env.JWT_SECRET) {
   console.error('Error: JWT_SECRET is not defined in .env');
   process.exit(1);
 }
+
 if (!process.env.MONGODB_URI) {
   console.error('Error: MONGODB_URI is not defined in .env');
   process.exit(1);
 }
+
 if (!process.env.SENDGRID_API_KEY) {
   console.error('Error: SENDGRID_API_KEY is not defined in .env');
   process.exit(1);
 }
+
 if (!process.env.FROM_EMAIL) {
   console.error('Error: FROM_EMAIL is not defined in .env');
   process.exit(1);
@@ -33,10 +36,8 @@ if (!process.env.FROM_EMAIL) {
 
 // MongoDB Connection
 mongoose.connect(`${process.env.MONGODB_URI}/SplitScreenDatabase`, {
-  serverSelectionTimeoutMS: 10000,
-  heartbeatFrequencyMS: 20000,
-  autoReconnect: true,
-  reconnectTries: 10,
+  serverSelectionTimeoutMS: 5000,
+  heartbeatFrequencyMS: 10000,
 })
   .then(() => console.log('MongoDB Connected'))
   .catch(err => console.error('MongoDB Connection Error:', err));
@@ -53,10 +54,9 @@ const User = mongoose.model('User', userSchema);
 
 // CORS configuration
 app.use(cors({
-  origin: [
-    'http://localhost:3000',
-    'https://split-screen-inky.vercel.app',
-  ],
+  origin: process.env.NODE_ENV === 'production'
+    ? 'https://split-screen-inky.vercel.app'
+    : ['http://localhost:3000', 'https://split-screen-inky.vercel.app'],
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
@@ -64,8 +64,6 @@ app.use(cors({
 }));
 
 app.options('*', cors());
-
-app.use(express.json());
 
 // Request logging middleware
 app.use((req, res, next) => {
@@ -76,11 +74,15 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use(express.json());
+
 // Enhanced error handling middleware
 app.use((err, req, res, next) => {
   console.error('Server error:', err.stack);
   res.status(500).json({
-    error: process.env.NODE_ENV === 'production' ? 'Internal server error' : err.message,
+    error: process.env.NODE_ENV === 'production'
+      ? 'Internal server error'
+      : err.message,
   });
 });
 
@@ -103,7 +105,7 @@ app.post('/api/signup', async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
     user = new User({ email, password: hashedPassword });
     await user.save();
-    const token = jwt.sign({ email, userId: user._id }, process.env.JWT_SECRET, { expiresIn: '24h' });
+    const token = jwt.sign({ email }, process.env.JWT_SECRET, { expiresIn: '1h' });
     res.status(201).json({ token });
   } catch (err) {
     console.error('Signup error:', err);
@@ -126,53 +128,64 @@ app.post('/api/login', async (req, res) => {
     if (!isMatch) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
-    const token = jwt.sign({ email, userId: user._id }, process.env.JWT_SECRET, { expiresIn: '24h' });
+    const token = jwt.sign({ email }, process.env.JWT_SECRET, { expiresIn: '1h' });
     res.json({ token });
   } catch (err) {
-    console.error('Login error:', err.stack);
-    res.status(500).json({ error: 'Server error', details: process.env.NODE_ENV === 'development' ? err.message : undefined });
+    console.error('Login error:', err);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Forgot Password endpoint
-app.post('/api/forgot-password', async (req, res) => {
-  const { email } = req.body;
-  if (!email) {
-    return res.status(400).json({ error: 'Email is required' });
-  }
-  try {
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    const resetToken = jwt.sign({ userId: user._id, email }, process.env.JWT_SECRET, { expiresIn: '1h' });
-    user.resetToken = resetToken;
-    user.resetTokenExpiry = Date.now() + 3600000;
-    await user.save();
-    const resetLink = `${process.env.NODE_ENV === 'production' 
-      ? 'https://split-screen-inky.vercel.app' 
-      : 'http://localhost:3000'}/reset-password?token=${encodeURIComponent(resetToken)}&email=${encodeURIComponent(email)}`;
-    const msg = {
-      to: email,
-      from: process.env.FROM_EMAIL,
-      subject: 'Password Reset Request',
-      html: `
-        <p>Hello,</p>
-        <p>You requested a password reset. Click the link below to reset your password:</p>
-        <p><a href="${resetLink}">Reset Password</a></p>
-        <p>This link will expire in 1 hour.</p>
-        <p>If you did not request this, please ignore this email.</p>
-      `,
-    };
-    await sgMail.send(msg);
-    console.log(`Password reset email sent to ${email}`);
-    res.status(200).json({ message: 'Password reset link sent to your email' });
-  } catch (err) {
-    console.error('Forgot password error:', err);
-    if (err.response) console.error('SendGrid response:', err.response.body);
-    res.status(500).json({ error: 'Failed to send reset email' });
-  }
-});
+// Replace the existing /api/forgot-password endpoint with this
+     app.post('/api/forgot-password', async (req, res) => {
+       const { email } = req.body;
+       if (!email) {
+         return res.status(400).json({ error: 'Email is required' });
+       }
+       try {
+         const user = await User.findOne({ email });
+         if (!user) {
+           return res.status(404).json({ error: 'User not found' });
+         }
+
+         // Generate JWT token for password reset
+         const resetToken = jwt.sign({ userId: user._id, email }, process.env.JWT_SECRET, { expiresIn: '1h' });
+
+         // Store token in database (optional, for additional validation)
+         user.resetToken = resetToken;
+         user.resetTokenExpiry = Date.now() + 3600000; // 1 hour expiry
+         await user.save();
+
+         // Create reset link
+         const resetLink = `${process.env.NODE_ENV === 'production' 
+           ? 'https://split-screen-inky.vercel.app' 
+           : 'http://localhost:3000'}/reset-password?token=${encodeURIComponent(resetToken)}&email=${encodeURIComponent(email)}`;
+
+         // Send email using SendGrid
+         const msg = {
+           to: email,
+           from: process.env.FROM_EMAIL,
+           subject: 'Password Reset Request',
+           html: `
+             <p>Hello,</p>
+             <p>You requested a password reset. Click the link below to reset your password:</p>
+             <p><a href="${resetLink}">Reset Password</a></p>
+             <p>This link will expire in 1 hour.</p>
+             <p>If you did not request this, please ignore this email.</p>
+           `,
+         };
+
+         await sgMail.send(msg);
+         console.log(`Password reset email sent to ${email}`);
+         res.status(200).json({ message: 'Password reset link sent to your email' });
+       } catch (err) {
+         console.error('Forgot password error:', err);
+         if (err.response) {
+           console.error('SendGrid response:', err.response.body); // Log detailed SendGrid error
+         }
+         res.status(500).json({ error: 'Failed to send reset email' });
+       }
+     });
 
 // Reset Password endpoint
 app.post('/api/reset-password', async (req, res) => {
@@ -181,19 +194,25 @@ app.post('/api/reset-password', async (req, res) => {
     return res.status(400).json({ error: 'Email, token, and new password are required' });
   }
   try {
+    // Verify JWT token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     if (decoded.email !== email || !decoded.userId) {
       return res.status(400).json({ error: 'Invalid or expired reset token' });
     }
+
+    // Find user
     const user = await User.findOne({ _id: decoded.userId, email });
     if (!user || (user.resetToken && user.resetToken !== token) || (user.resetTokenExpiry && Date.now() > user.resetTokenExpiry)) {
       return res.status(400).json({ error: 'Invalid or expired reset token' });
     }
+
+    // Hash new password
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     user.password = hashedPassword;
     user.resetToken = undefined;
     user.resetTokenExpiry = undefined;
     await user.save();
+
     res.status(200).json({ message: 'Password reset successful' });
   } catch (err) {
     console.error('Reset password error:', err);
@@ -215,7 +234,7 @@ app.post('/api/google-login', async (req, res) => {
     } else if (user.googleId && user.googleId !== googleId) {
       return res.status(401).json({ error: 'Invalid Google account' });
     }
-    const token = jwt.sign({ email, userId: user._id }, process.env.JWT_SECRET, { expiresIn: '24h' });
+    const token = jwt.sign({ email }, process.env.JWT_SECRET, { expiresIn: '1h' });
     res.json({ token });
   } catch (err) {
     console.error('Google login error:', err);
@@ -461,7 +480,7 @@ app.get('/api/proxy', async (req, res) => {
         console.log('Extracted images:', drawingsFromCarousel);
 
         const claims = $('section[itemprop="claims"]').html() || $('div.claims').html() || $('div#claims').html() || '';
-        const description = $('section[itemprop="description"]').html() || $('div.description').html() || $('div#description').html() || '';
+      const description = $('section[itemprop="description"]').html() || $('div.description').html() || $('div#description').html() || '';
         const similarDocs = $('tr[itemprop="similarDocuments"]').map((i, el) => {
           const number = $(el).find('td[itemprop="publicationNumber"]').text().trim() || $(el).find('td:nth-child(1)').text().trim();
           const date = $(el).find('time[itemprop="publicationDate"]').text().trim() || $(el).find('td[itemprop="publicationDate"]').text().trim() || $(el).find('td:nth-child(2)').text().trim();
@@ -565,20 +584,23 @@ app.get('/api/proxy', async (req, res) => {
 
         console.log('Extracted Patent Data:', JSON.stringify(patentData, null, 2));
         res.json(patentData);
-      } else if (contentType.includes('application/pdf')) {
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', 'inline; filename=patent.pdf');
-        res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
-        response.body.pipe(res);
       } else {
         res.setHeader('Content-Disposition', 'inline');
         response.body.pipe(res);
       }
-    } 
-  }catch (error) {
-      console.error('Proxy: Error:', error.message);
-      res.status(500).json({ error: `Server error: ${error.message}` });
+    } else if (contentType.includes('application/pdf')) {
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'inline; filename=patent.pdf');
+      res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+      response.body.pipe(res);
+    } else {
+      res.setHeader('Content-Disposition', 'inline');
+      response.body.pipe(res);
     }
+  } catch (error) {
+    console.error('Proxy: Error:', error.message);
+    res.status(500).json({ error: `Server error: ${error.message}` });
+  }
 });
 
 const PORT = process.env.PORT || 5000;
