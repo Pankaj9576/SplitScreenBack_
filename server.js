@@ -600,7 +600,7 @@ app.get('/api/proxy', async (req, res) => {
   } catch (error) {
     console.error('Proxy: Error:', error.message);
     res.status(500).json({ error: `Server error: ${error.message}` });
-  }
+  }//
 });
 
 const PORT = process.env.PORT || 5000;
