@@ -150,13 +150,58 @@ app.post('/api/forgot-password', async (req, res) => {
     const msg = {
       to: email,
       from: process.env.FROM_EMAIL,
-      subject: 'Password Reset Request',
+      subject: 'Password Reset Request - Split Screen',
       html: `
-        <p>Hello,</p>
-        <p>You requested a password reset. Click the link below to reset your password:</p>
-        <p><a href="${resetLink}">Reset Password</a></p>
-        <p>This link will expire in 1 hour.</p>
-        <p>If you did not request this, please ignore this email.</p>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Split Screen Password Reset</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: Arial, Helvetica, sans-serif; background-color: #f4f4f4;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; margin: 20px auto; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+    <tr>
+      <td style="padding: 20px; text-align: center; background-color: #007bff; border-radius: 8px 8px 0 0;">
+        <h1 style="color: #ffffff; margin: 0; font-size: 24px;">Split Screen</h1>
+        <p style="color: #ffffff; margin: 5px 0 0; font-size: 14px;">Your Multi-Screen Productivity App</p>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding: 20px;">
+        <h2 style="color: #333333; font-size: 20px; margin: 0 0 10px;">Password Reset Request</h2>
+        <p style="color: #555555; font-size: 16px; line-height: 1.5; margin: 0 0 20px;">
+          Hello,
+        </p>
+        <p style="color: #555555; font-size: 16px; line-height: 1.5; margin: 0 0 20px;">
+          You requested a password reset for your Split Screen account. Click the button below to reset your password:
+        </p>
+        <table role="presentation" cellspacing="0" cellpadding="0" style="margin: 20px auto;">
+          <tr>
+            <td style="border-radius: 4px; background-color: #007bff;">
+              <a href="${resetLink}" style="display: inline-block; padding: 12px 24px; color: #ffffff; font-size: 16px; text-decoration: none; border-radius: 4px;">Reset Password</a>
+            </td>
+          </tr>
+        </table>
+        <p style="color: #555555; font-size: 16px; line-height: 1.5; margin: 0 0 20px;">
+          This link will expire in 1 hour for your security.
+        </p>
+        <p style="color: #555555; font-size: 16px; line-height: 1.5; margin: 0 0 20px;">
+          If you did not request this password reset, please ignore this email or contact our support team at <a href="mailto:support@splitscreenapp.com" style="color: #007bff; text-decoration: none;">support@splitscreenapp.com</a>.
+        </p>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding: 20px; text-align: center; background-color: #f4f4f4; border-radius: 0 0 8px 8px;">
+        <p style="color: #777777; font-size: 12px; margin: 0;">
+          © 2025 Split Screen. All rights reserved.<br>
+          <a href="https://split-screen-inky.vercel.app" style="color: #007bff; text-decoration: none;">Visit our website</a>
+        </p>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
       `,
     };
     await sgMail.send(msg);
