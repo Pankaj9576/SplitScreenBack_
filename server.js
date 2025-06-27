@@ -7,13 +7,12 @@ const bcrypt = require('bcryptjs');
 const mongoose = require('mongoose');
 const sgMail = require('@sendgrid/mail');
 require('dotenv').config();
+const scrapeEspacenetPatent = require('./scrapeEspacenetPatent');
 
 const app = express();
 
-// Set SendGrid API Key
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
-// Validate environment variables
 if (!process.env.JWT_SECRET) {
   console.error('Error: JWT_SECRET is not defined in .env');
   process.exit(1);
@@ -34,7 +33,6 @@ if (!process.env.FROM_EMAIL) {
   process.exit(1);
 }
 
-// MongoDB Connection
 mongoose.connect(`${process.env.MONGODB_URI}/SplitScreenDatabase`, {
   serverSelectionTimeoutMS: 5000,
   heartbeatFrequencyMS: 10000,
@@ -42,7 +40,6 @@ mongoose.connect(`${process.env.MONGODB_URI}/SplitScreenDatabase`, {
   .then(() => console.log('MongoDB Connected'))
   .catch(err => console.error('MongoDB Connection Error:', err.message));
 
-// User Schema
 const userSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true },
   password: { type: String, required: true },
@@ -52,9 +49,9 @@ const userSchema = new mongoose.Schema({
 });
 const User = mongoose.model('User', userSchema);
 
-// CORS configuration
+// Apply CORS middleware first
 app.use(cors({
-  origin: ['https://split-screen-inky.vercel.app', 'http://localhost:3000'],
+  origin: ['https://frontendsplitscreen.vercel.app', 'http://localhost:3000', 'https://split-screen-inky.vercel.app'],
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
@@ -63,7 +60,6 @@ app.use(cors({
 
 app.options('*', cors());
 
-// Request logging middleware
 app.use((req, res, next) => {
   console.log(`Request - Method: ${req.method}, Origin: ${req.headers.origin}, Path: ${req.path}`);
   res.on('finish', () => {
@@ -74,89 +70,90 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-// Enhanced error handling middleware
 app.use((err, req, res, next) => {
   console.error('Server error:', err.stack);
+  res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
   res.status(500).json({
-    error: process.env.NODE_ENV === 'production'
-      ? 'Internal server error'
-      : err.message,
+    error: process.env.NODE_ENV === 'production' ? 'Internal server error' : err.message,
   });
 });
 
-// Health check endpoint
 app.get('/health', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
   res.status(200).json({ status: 'OK', message: 'Server is running' });
 });
 
-// Signup endpoint
 app.post('/api/signup', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
+    res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
     return res.status(400).json({ error: 'Email and password are required' });
   }
   try {
     let user = await User.findOne({ email });
     if (user) {
+      res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
       return res.status(400).json({ error: 'User already exists' });
     }
     const hashedPassword = await bcrypt.hash(password, 10);
     user = new User({ email, password: hashedPassword });
     await user.save();
     const token = jwt.sign({ email }, process.env.JWT_SECRET, { expiresIn: '1h' });
+    res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
     res.status(201).json({ token });
   } catch (err) {
     console.error('Signup error:', err);
+    res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Login endpoint
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
+    res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
     return res.status(400).json({ error: 'Email and password are required' });
   }
   try {
     const user = await User.findOne({ email });
     if (!user) {
+      res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
       return res.status(401).json({ error: 'Invalid email or password' });
     }
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
+      res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
       return res.status(401).json({ error: 'Invalid email or password' });
     }
     const token = jwt.sign({ email }, process.env.JWT_SECRET, { expiresIn: '1h' });
+    res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
     res.json({ token });
   } catch (err) {
     console.error('Login error:', err);
+    res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Forgot Password endpoint
 app.post('/api/forgot-password', async (req, res) => {
   const { email } = req.body;
   if (!email) {
+    res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
     return res.status(400).json({ error: 'Email is required' });
   }
   try {
     const user = await User.findOne({ email });
     if (!user) {
+      res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
       return res.status(404).json({ error: 'User not found' });
     }
-
     const resetToken = jwt.sign({ userId: user._id, email }, process.env.JWT_SECRET, { expiresIn: '1h' });
     user.resetToken = resetToken;
-    user.resetTokenExpiry = Date.now() + 3600000; // 1 hour expiry
+    user.resetTokenExpiry = Date.now() + 3600000;
     await user.save();
-    console.log('Generated reset token:', resetToken); // Debug log
-
     const resetLink = `${process.env.NODE_ENV === 'production' 
       ? 'https://split-screen-inky.vercel.app' 
       : 'http://localhost:3000'}/reset-password?token=${encodeURIComponent(resetToken)}&email=${encodeURIComponent(email)}`;
-    console.log('Generated reset link:', resetLink); // Debug log
-
     const msg = {
       to: email,
       from: process.env.FROM_EMAIL,
@@ -169,60 +166,59 @@ app.post('/api/forgot-password', async (req, res) => {
         <p>If you did not request this, please ignore this email.</p>
       `,
     };
-
     await sgMail.send(msg);
     console.log(`Password reset email sent to ${email}`);
+    res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
     res.status(200).json({ message: 'Password reset link sent to your email' });
   } catch (err) {
     console.error('Forgot password error:', err);
     if (err.response) {
       console.error('SendGrid response:', err.response.body);
     }
+    res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
     res.status(500).json({ error: 'Failed to send reset email' });
   }
 });
 
-// Reset Password endpoint
 app.post('/api/reset-password', async (req, res) => {
   const { email, token, newPassword } = req.body;
   if (!email || !token || !newPassword) {
+    res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
     return res.status(400).json({ error: 'Email, token, and new password are required' });
   }
   try {
-    console.log('Received reset request - Email:', email, 'Token:', token); // Debug log
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    console.log('Decoded token payload:', decoded); // Debug log
-
     if (decoded.email !== email) {
+      res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
       return res.status(400).json({ error: 'Email mismatch in token' });
     }
-
     const user = await User.findOne({ _id: decoded.userId, email });
     if (!user || !user.resetToken || user.resetToken !== token || (user.resetTokenExpiry && Date.now() > user.resetTokenExpiry)) {
+      res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
       return res.status(400).json({ error: 'Invalid or expired reset token' });
     }
-
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     user.password = hashedPassword;
     user.resetToken = undefined;
     user.resetTokenExpiry = undefined;
     await user.save();
-    console.log('Password reset successful for email:', email);
-
+    res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
     res.status(200).json({ message: 'Password reset successful' });
   } catch (err) {
     console.error('Reset password error:', err);
     if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
+      res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
       return res.status(400).json({ error: 'Invalid or expired reset token' });
     }
+    res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Google login endpoint
 app.post('/api/google-login', async (req, res) => {
   const { email, googleId } = req.body;
   if (!email || !googleId) {
+    res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
     return res.status(400).json({ error: 'Email and Google ID are required' });
   }
   try {
@@ -231,40 +227,46 @@ app.post('/api/google-login', async (req, res) => {
       user = new User({ email, googleId });
       await user.save();
     } else if (user.googleId && user.googleId !== googleId) {
+      res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
       return res.status(401).json({ error: 'Invalid Google account' });
     }
     const token = jwt.sign({ email }, process.env.JWT_SECRET, { expiresIn: '1h' });
+    res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
     res.json({ token });
   } catch (err) {
     console.error('Google login error:', err);
+    res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Token verification endpoint
 app.post('/api/verify-token', (req, res) => {
   const token = req.headers.authorization?.split('Bearer ')[1];
   if (!token) {
+    res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
     return res.status(401).json({ valid: false, error: 'No token provided' });
   }
   try {
     jwt.verify(token, process.env.JWT_SECRET);
+    res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
     res.json({ valid: true });
   } catch (err) {
     console.error('Token verification error:', err);
+    res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
     res.status(401).json({ valid: false, error: 'Invalid token' });
   }
 });
 
-// Proxy PDF endpoint
 app.get('/api/proxy-pdf', async (req, res) => {
   const pdfUrl = req.query.url;
   if (!pdfUrl) {
+    res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
     return res.status(400).json({ error: 'PDF URL parameter is required' });
   }
   try {
     new URL(pdfUrl);
   } catch (e) {
+    res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
     return res.status(400).json({ error: 'Invalid PDF URL' });
   }
   console.log(`Proxying PDF: ${pdfUrl}`);
@@ -280,25 +282,33 @@ app.get('/api/proxy-pdf', async (req, res) => {
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`Proxy PDF: Fetch failed - ${response.status} - ${errorText}`);
+      res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
       return res.status(response.status).json({ error: `Failed to fetch PDF: ${response.statusText}` });
     }
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'inline; filename=patent.pdf');
     res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
     response.body.pipe(res);
   } catch (error) {
     console.error('Proxy PDF: Error:', error.message);
+    res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
     res.status(500).json({ error: `Server error: ${error.message}` });
   }
 });
 
-// Proxy endpoint
 app.get('/api/proxy', async (req, res) => {
   console.log('Proxy: Request received');
+  res.setHeader('Access-Control-Allow-Origin', 'https://split-screen-inky.vercel.app');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Max-Age', '86400');
+
   let targetUrl = req.query.url;
   if (!targetUrl) {
     console.log('Proxy: URL parameter missing');
-    return res.status(400).json({ error: 'URL parameter is required' });
+    res.status(400).json({ error: 'URL parameter is required' });
+    return;
   }
   targetUrl = decodeURIComponent(targetUrl);
   if (targetUrl.includes('/api/proxy?url=')) {
@@ -311,7 +321,8 @@ app.get('/api/proxy', async (req, res) => {
     new URL(targetUrl);
   } catch (e) {
     console.log('Proxy: Invalid URL');
-    return res.status(400).json({ error: 'Invalid URL' });
+    res.status(400).json({ error: 'Invalid URL' });
+    return;
   }
   console.log(`Proxy: Fetching URL - ${targetUrl}`);
   const fetchHeaders = {
@@ -324,35 +335,32 @@ app.get('/api/proxy', async (req, res) => {
     'Accept-Encoding': 'gzip, deflate, br',
     'Cache-Control': 'no-cache',
   };
-
   try {
     const token = targetUrl.includes('worldwide.espacenet.com/patent') ? 2 : 1;
     console.log(`Proxy: Assigned token - ${token} (1=Google, 2=Espacenet)`);
-
     if (targetUrl.includes('worldwide.espacenet.com/patent')) {
       const publicationNumberMatch = targetUrl.match(/([A-Z]{2}\d+[A-Z]\d?)/);
       if (!publicationNumberMatch) {
         console.log('Proxy: Could not extract publication number from Espacenet URL');
-        return res.status(400).json({ error: 'Invalid Espacenet URL: Could not extract publication number' });
+        res.status(400).json({ error: 'Invalid Espacenet URL: Could not extract publication number' });
+        return;
       }
       const publicationNumber = publicationNumberMatch[0];
       targetUrl = `https://patents.google.com/patent/${publicationNumber}`;
       console.log(`Proxy: Converted Espacenet URL to Google Patents URL - ${targetUrl}`);
     }
-
     const response = await fetch(targetUrl, { headers: fetchHeaders, redirect: 'follow' });
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`Proxy: Fetch failed - ${response.status} - ${errorText}`);
-      return res.status(response.status).json({ error: `Failed to fetch URL: ${response.statusText}` });
+      res.status(response.status).json({ error: `Failed to fetch URL: ${response.statusText}` });
+      return;
     }
     const contentType = response.headers.get('content-type') || 'application/octet-stream';
     res.setHeader('Content-Type', contentType);
-
     if (contentType.includes('text/html')) {
       const html = await response.text();
       const $ = cheerio.load(html);
-
       if (targetUrl.includes('patents.google.com/patent')) {
         const title = $('h2#title').text().trim() || $('meta[name="DC.title"]').attr('content')?.trim() || $('h1').text().trim() || $('title').text().trim();
         const abstract = $('div.abstract').text().trim() || $('section[itemprop="abstract"] p').text().trim() || $('abstract').text().trim() || $('div.abstract-text').text().trim();
@@ -401,7 +409,6 @@ app.get('/api/proxy', async (req, res) => {
           const country = $(el).find('td[itemprop="country"]').text().trim() || $(el).find('td:nth-child(3)').text().trim();
           return { number, date, country };
         }).get();
-
         const applicationEvents = [];
         $('div.event.layout.horizontal.style-scope.application-timeline').each((i, elem) => {
           let dateElement = $(elem)
@@ -423,7 +430,6 @@ app.get('/api/proxy', async (req, res) => {
             applicationEvents.push({ date: dateElement, title: titleElement });
           }
         });
-
         if (applicationEvents.length === 0) {
           const legalEventMap = {
             'AS': `Assigned to ${assignee || 'Unknown Assignee'}`,
@@ -461,23 +467,19 @@ app.get('/api/proxy', async (req, res) => {
             applicationEvents.push({ date: '2030-03-08', title: 'Anticipated expiration' });
           }
         }
-
         applicationEvents.sort((a, b) => {
           if (a.date === 'Status') return 1;
           if (b.date === 'Status') return -1;
           return new Date(a.date) - new Date(b.date);
         });
-
         console.log('Extracted Application Events:', JSON.stringify(applicationEvents, null, 2));
         console.log('Raw HTML Snippet for Application Timeline:', $('div.wrap.style-scope.application-timeline').html()?.slice(0, 2000) || 'No timeline found');
-
         const drawingsFromCarousel = [];
         $('meta[itemprop="full"]').each((i, elem) => {
           const content = $(elem).attr('content');
           if (content) drawingsFromCarousel.push(content);
         });
         console.log('Extracted images:', drawingsFromCarousel);
-
         const claims = $('section[itemprop="claims"]').html() || $('div.claims').html() || $('div#claims').html() || '';
         const description = $('section[itemprop="description"]').html() || $('div.description').html() || $('div#description').html() || '';
         const similarDocs = $('tr[itemprop="similarDocuments"]').map((i, el) => {
@@ -486,7 +488,6 @@ app.get('/api/proxy', async (req, res) => {
           const title = $(el).find('td[itemprop="title"]').text().trim() || $(el).find('td:nth-child(3)').text().trim();
           return { number, date, title };
         }).get();
-
         let pdfUrl = null;
         const pdfEndpoint = targetUrl.endsWith('/') ? `${targetUrl}pdf` : `${targetUrl}/pdf`;
         try {
@@ -506,7 +507,6 @@ app.get('/api/proxy', async (req, res) => {
         } catch (err) {
           console.error('Failed to fetch PDF endpoint:', err.message);
         }
-
         if (!pdfUrl) {
           const possiblePdfLinks = $('a').filter((i, el) => {
             const href = $(el).attr('href') || '';
@@ -535,7 +535,6 @@ app.get('/api/proxy', async (req, res) => {
             console.log('Fallback: No PDF URL found in HTML after enhanced search.');
           }
         }
-
         if (!pdfUrl && publicationNumber) {
           const constructedPdfUrl = `https://patentimages.storage.googleapis.com/patents/${publicationNumber.toLowerCase()}.pdf`;
           try {
@@ -551,7 +550,6 @@ app.get('/api/proxy', async (req, res) => {
             console.error('Final Fallback: Failed to verify constructed PDF URL:', err.message);
           }
         }
-
         const patentData = {
           type: 'patent',
           source: 'google',
@@ -580,7 +578,6 @@ app.get('/api/proxy', async (req, res) => {
             pdfUrl,
           },
         };
-
         console.log('Extracted Patent Data:', JSON.stringify(patentData, null, 2));
         res.json(patentData);
       } else {
@@ -606,3 +603,5 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
+module.exports = app;
