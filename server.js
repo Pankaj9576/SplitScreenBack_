@@ -4,7 +4,9 @@ const cheerio = require('cheerio');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const crypto = require('crypto');
+const mongoose = require('mongoose');
+const sgMail = require('@sendgrid/mail');
+require('dotenv').config();
 const scrapeEspacenetPatent = require('./scrapeEspacenetPatent');
 
 const app = express();
