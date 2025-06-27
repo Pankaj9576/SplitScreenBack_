@@ -9,11 +9,44 @@ const scrapeEspacenetPatent = require('./scrapeEspacenetPatent');
 
 const app = express();
 
-// In-memory user store (use database in production)
-const users = [];
+sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
-// JWT secret (use environment variable in production)
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+if (!process.env.JWT_SECRET) {
+  console.error('Error: JWT_SECRET is not defined in .env');
+  process.exit(1);
+}
+
+if (!process.env.MONGODB_URI) {
+  console.error('Error: MONGODB_URI is not defined in .env');
+  process.exit(1);
+}
+
+if (!process.env.SENDGRID_API_KEY) {
+  console.error('Error: SENDGRID_API_KEY is not defined in .env');
+  process.exit(1);
+}
+
+if (!process.env.FROM_EMAIL) {
+  console.error('Error: FROM_EMAIL is not defined in .env');
+  process.exit(1);
+}
+
+mongoose.connect(`${process.env.MONGODB_URI}/SplitScreenDatabase`, {
+  serverSelectionTimeoutMS: 5000,
+  heartbeatFrequencyMS: 10000,
+})
+  .then(() => console.log('MongoDB Connected'))
+  .catch(err => console.error('MongoDB Connection Error:', err.message));
+
+const userSchema = new mongoose.Schema({
+  email: { type: String, required: true, unique: true },
+  password: { type: String, required: true },
+  resetToken: String,
+  resetTokenExpiry: Date,
+  googleId: String,
+});
+const User = mongoose.model('User', userSchema);
+
 
 // CORS middleware
 app.use(cors({
@@ -55,14 +88,15 @@ app.post('/api/signup', async (req, res) => {
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password are required' });
   }
-  if (users.find(user => user.email === email)) {
-    return res.status(400).json({ error: 'User already exists' });
-  }
   try {
+    let user = await User.findOne({ email });
+    if (user) {
+      return res.status(400).json({ error: 'User already exists' });
+    }
     const hashedPassword = await bcrypt.hash(password, 10);
-    const user = { email, password: hashedPassword };
-    users.push(user);
-    const token = jwt.sign({ email }, JWT_SECRET, { expiresIn: '1h' });
+    user = new User({ email, password: hashedPassword });
+    await user.save();
+    const token = jwt.sign({ email }, process.env.JWT_SECRET, { expiresIn: '1h' });
     res.status(201).json({ token });
   } catch (err) {
     console.error('Signup error:', err);
@@ -76,16 +110,16 @@ app.post('/api/login', async (req, res) => {
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password are required' });
   }
-  const user = users.find(user => user.email === email);
-  if (!user) {
-    return res.status(401).json({ error: 'Invalid email or password' });
-  }
   try {
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
-    const token = jwt.sign({ email }, JWT_SECRET, { expiresIn: '1h' });
+    const token = jwt.sign({ email }, process.env.JWT_SECRET, { expiresIn: '1h' });
     res.json({ token });
   } catch (err) {
     console.error('Login error:', err);
@@ -99,45 +133,67 @@ app.post('/api/forgot-password', async (req, res) => {
   if (!email) {
     return res.status(400).json({ error: 'Email is required' });
   }
-  const user = users.find(user => user.email === email);
-  if (!user) {
-    return res.status(404).json({ error: 'User not found' });
-  }
   try {
-    const resetToken = crypto.randomBytes(20).toString('hex');
-    const resetTokenExpiry = Date.now() + 3600000;
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    const resetToken = jwt.sign({ userId: user._id, email }, process.env.JWT_SECRET, { expiresIn: '1h' });
     user.resetToken = resetToken;
-    user.resetTokenExpiry = resetTokenExpiry;
-    console.log(`Reset Token for ${email}: ${resetToken}`);
-    console.log('Copy the above token and use it to reset the password.');
-    res.status(200).json({ message: 'Reset token generated. Check server logs for the token.' });
+    user.resetTokenExpiry = Date.now() + 3600000;
+    await user.save();
+    const resetLink = `${process.env.NODE_ENV === 'production' 
+      ? 'https://split-screen-inky.vercel.app' 
+      : 'http://localhost:3000'}/reset-password?token=${encodeURIComponent(resetToken)}&email=${encodeURIComponent(email)}`;
+    const msg = {
+      to: email,
+      from: process.env.FROM_EMAIL,
+      subject: 'Password Reset Request',
+      html: `
+        <p>Hello,</p>
+        <p>You requested a password reset. Click the link below to reset your password:</p>
+        <p><a href="${resetLink}">Reset Password</a></p>
+        <p>This link will expire in 1 hour.</p>
+        <p>If you did not request this, please ignore this email.</p>
+      `,
+    };
+    await sgMail.send(msg);
+    console.log(`Password reset email sent to ${email}`);
+    res.status(200).json({ message: 'Password reset link sent to your email' });
   } catch (err) {
     console.error('Forgot password error:', err);
-    res.status(500).json({ error: 'Server error' });
+    if (err.response) {
+      console.error('SendGrid response:', err.response.body);
+    }
+    res.status(500).json({ error: 'Failed to send reset email' });
   }
 });
 
-// Reset Password endpoint
 app.post('/api/reset-password', async (req, res) => {
   const { email, token, newPassword } = req.body;
   if (!email || !token || !newPassword) {
     return res.status(400).json({ error: 'Email, token, and new password are required' });
   }
-  const user = users.find(user => user.email === email);
-  if (!user) {
-    return res.status(404).json({ error: 'User not found' });
-  }
-  if (!user.resetToken || user.resetToken !== token || !user.resetTokenExpiry || Date.now() > user.resetTokenExpiry) {
-    return res.status(400).json({ error: 'Invalid or expired reset token' });
-  }
   try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (decoded.email !== email) {
+      return res.status(400).json({ error: 'Email mismatch in token' });
+    }
+    const user = await User.findOne({ _id: decoded.userId, email });
+    if (!user || !user.resetToken || user.resetToken !== token || (user.resetTokenExpiry && Date.now() > user.resetTokenExpiry)) {
+      return res.status(400).json({ error: 'Invalid or expired reset token' });
+    }
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     user.password = hashedPassword;
     user.resetToken = undefined;
     user.resetTokenExpiry = undefined;
+    await user.save();
     res.status(200).json({ message: 'Password reset successful' });
   } catch (err) {
     console.error('Reset password error:', err);
+    if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
+      return res.status(400).json({ error: 'Invalid or expired reset token' });
+    }
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -171,7 +227,7 @@ app.post('/api/verify-token', (req, res) => {
     return res.status(401).json({ valid: false, error: 'No token provided' });
   }
   try {
-    jwt.verify(token, JWT_SECRET);
+    jwt.verify(token, process.env.JWT_SECRET);
     res.json({ valid: true });
   } catch (err) {
     console.error('Token verification error:', err);
