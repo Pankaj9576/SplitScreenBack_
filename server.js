@@ -40,6 +40,17 @@ mongoose.connect(`${process.env.MONGODB_URI}/SplitScreenDatabase`, {
   .then(() => console.log('MongoDB Connected'))
   .catch(err => console.error('MongoDB Connection Error:', err.message));
 
+// Contact Schema
+const contactSchema = new mongoose.Schema({
+  firstName: { type: String, required: true },
+  lastName: { type: String, required: true },
+  email: { type: String, required: true },
+  phone: String,
+  message: { type: String, required: true },
+  submittedAt: { type: Date, default: Date.now },
+});
+const Contact = mongoose.model('Contact', contactSchema);
+
 const userSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true },
   password: { type: String, required: true },
@@ -48,7 +59,6 @@ const userSchema = new mongoose.Schema({
   googleId: String,
 });
 const User = mongoose.model('User', userSchema);
-
 
 // CORS middleware
 app.use(cors({
@@ -259,7 +269,7 @@ app.post('/api/google-login', async (req, res) => {
     return res.status(401).json({ error: 'Invalid Google account' });
   }
   try {
-    const token = jwt.sign({ email }, JWT_SECRET, { expiresIn: '1h' });
+    const token = jwt.sign({ email }, process.env.JWT_SECRET, { expiresIn: '1h' });
     res.json({ token });
   } catch (err) {
     console.error('Google login error:', err);
@@ -627,6 +637,22 @@ app.get('/api/proxy', async (req, res) => {
   } catch (error) {
     console.error('Proxy: Error:', error.message);
     res.status(500).json({ error: `Server error: ${error.message}` });
+  }
+});
+
+// New Contact Submission Endpoint
+app.post('/api/submit-contact', async (req, res) => {
+  const { firstName, lastName, email, phone, message } = req.body;
+  if (!firstName || !lastName || !email || !message) {
+    return res.status(400).json({ error: 'First Name, Last Name, Email, and Message are required' });
+  }
+  try {
+    const newContact = new Contact({ firstName, lastName, email, phone, message });
+    await newContact.save();
+    res.status(201).json({ message: 'Contact form submitted successfully' });
+  } catch (err) {
+    console.error('Contact submission error:', err);
+    res.status(500).json({ error: 'Failed to submit contact form' });
   }
 });
 
