@@ -197,7 +197,7 @@ app.post('/api/forgot-password', async (req, res) => {
           This link will expire in 1 hour for your security.
         </p>
         <p style="color: #555555; font-size: 16px; line-height: 1.5; margin: 0 0 20px;">
-          If you did not request this password reset, please ignore this email or contact our support team at <a href="mailto:support@splitscreenapp.com" style="color: #007bff; text-decoration: none;">support@splitscreenapp.com</a>.
+          If you did not request this password reset, please ignore this email or contact our support team at <a href="mailto:contact@bayslope.com" style="color: #007bff; text-decoration: none;">contact@bayslope.com</a>.
         </p>
       </td>
     </tr>
@@ -205,7 +205,7 @@ app.post('/api/forgot-password', async (req, res) => {
       <td style="padding: 20px; text-align: center; background-color: #f4f4f4; border-radius: 0 0 8px 8px;">
         <p style="color: #777777; font-size: 12px; margin: 0;">
           © 2025 Split Screen. All rights reserved.<br>
-          <a href="https://split-screen-inky.vercel.app" style="color: #007bff; text-decoration: none;">Visit our website</a>
+          <a href="https://bayslope.com" style="color: #007bff; text-decoration: none;">Visit our website</a>
         </p>
       </td>
     </tr>
