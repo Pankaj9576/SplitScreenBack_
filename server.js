@@ -51,9 +51,20 @@ const contactSchema = new mongoose.Schema({
 });
 const Contact = mongoose.model('Contact', contactSchema);
 
+// Feedback Schema
+const feedbackSchema = new mongoose.Schema({
+  feedbackType: { type: String, required: true }, // e.g., comments, suggestion, question
+  description: { type: String, required: true },
+  name: String, // optional
+  email: String, // optional
+  submittedAt: { type: Date, default: Date.now },
+});
+const Feedback = mongoose.model('Feedback', feedbackSchema);
+
 const userSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true },
   password: { type: String, required: true },
+  name: { type: String, required: true }, // Added username field
   resetToken: String,
   resetTokenExpiry: Date,
   googleId: String,
@@ -96,9 +107,9 @@ app.get('/health', (req, res) => {
 
 // Signup endpoint
 app.post('/api/signup', async (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password) {
-    return res.status(400).json({ error: 'Email and password are required' });
+  const { email, password, name } = req.body;
+  if (!email || !password || !name) {
+    return res.status(400).json({ error: 'Email, password, and name are required' });
   }
   try {
     let user = await User.findOne({ email });
@@ -106,7 +117,7 @@ app.post('/api/signup', async (req, res) => {
       return res.status(400).json({ error: 'User already exists' });
     }
     const hashedPassword = await bcrypt.hash(password, 10);
-    user = new User({ email, password: hashedPassword });
+    user = new User({ email, password: hashedPassword, name });
     await user.save();
     const token = jwt.sign({ email }, process.env.JWT_SECRET, { expiresIn: '1h' });
     res.status(201).json({ token });
@@ -653,6 +664,22 @@ app.post('/api/submit-contact', async (req, res) => {
   } catch (err) {
     console.error('Contact submission error:', err);
     res.status(500).json({ error: 'Failed to submit contact form' });
+  }
+});
+
+// New Feedback Submission Endpoint
+app.post('/api/submit-feedback', async (req, res) => {
+  const { feedbackType, description, name, email } = req.body;
+  if (!feedbackType || !description) {
+    return res.status(400).json({ error: 'Feedback Type and Description are required' });
+  }
+  try {
+    const newFeedback = new Feedback({ feedbackType, description, name, email });
+    await newFeedback.save();
+    res.status(201).json({ message: 'Feedback submitted successfully' });
+  } catch (err) {
+    console.error('Feedback submission error:', err);
+    res.status(500).json({ error: 'Failed to submit feedback' });
   }
 });
 
