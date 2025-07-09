@@ -7,13 +7,12 @@ const bcrypt = require('bcryptjs');
 const mongoose = require('mongoose');
 const sgMail = require('@sendgrid/mail');
 require('dotenv').config();
+const scrapeEspacenetPatent = require('./scrapeEspacenetPatent');
 
 const app = express();
 
-// Set SendGrid API Key
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
-// Validate environment variables
 if (!process.env.JWT_SECRET) {
   console.error('Error: JWT_SECRET is not defined in .env');
   process.exit(1);
@@ -34,7 +33,6 @@ if (!process.env.FROM_EMAIL) {
   process.exit(1);
 }
 
-// MongoDB Connection
 mongoose.connect(`${process.env.MONGODB_URI}/SplitScreenDatabase`, {
   serverSelectionTimeoutMS: 5000,
   heartbeatFrequencyMS: 10000,
@@ -42,7 +40,17 @@ mongoose.connect(`${process.env.MONGODB_URI}/SplitScreenDatabase`, {
   .then(() => console.log('MongoDB Connected'))
   .catch(err => console.error('MongoDB Connection Error:', err.message));
 
-// User Schema
+// Contact Schema
+const contactSchema = new mongoose.Schema({
+  firstName: { type: String, required: true },
+  lastName: { type: String, required: true },
+  email: { type: String, required: true },
+  phone: String,
+  message: { type: String, required: true },
+  submittedAt: { type: Date, default: Date.now },
+});
+const Contact = mongoose.model('Contact', contactSchema);
+
 const userSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true },
   password: { type: String, required: true },
@@ -52,15 +60,16 @@ const userSchema = new mongoose.Schema({
 });
 const User = mongoose.model('User', userSchema);
 
-// CORS configuration
+// CORS middleware
 app.use(cors({
-  origin: ['https://split-screen-inky.vercel.app', 'http://localhost:3000'],
+  origin: ['https://frontendsplitscreen.vercel.app', 'http://localhost:3000', 'https://split-screen-inky.vercel.app'],
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
   maxAge: 86400,
 }));
 
+// Handle preflight requests
 app.options('*', cors());
 
 // Request logging middleware
@@ -74,14 +83,10 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-// Enhanced error handling middleware
+// Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('Server error:', err.stack);
-  res.status(500).json({
-    error: process.env.NODE_ENV === 'production'
-      ? 'Internal server error'
-      : err.message,
-  });
+  console.error('Server error:', err);
+  res.status(500).json({ error: 'Internal server error' });
 });
 
 // Health check endpoint
@@ -145,31 +150,70 @@ app.post('/api/forgot-password', async (req, res) => {
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
-
     const resetToken = jwt.sign({ userId: user._id, email }, process.env.JWT_SECRET, { expiresIn: '1h' });
     user.resetToken = resetToken;
-    user.resetTokenExpiry = Date.now() + 3600000; // 1 hour expiry
+    user.resetTokenExpiry = Date.now() + 3600000;
     await user.save();
-    console.log('Generated reset token:', resetToken); // Debug log
-
     const resetLink = `${process.env.NODE_ENV === 'production' 
       ? 'https://split-screen-inky.vercel.app' 
       : 'http://localhost:3000'}/reset-password?token=${encodeURIComponent(resetToken)}&email=${encodeURIComponent(email)}`;
-    console.log('Generated reset link:', resetLink); // Debug log
-
     const msg = {
       to: email,
       from: process.env.FROM_EMAIL,
-      subject: 'Password Reset Request',
+      subject: 'Password Reset Request - Split Screen',
       html: `
-        <p>Hello,</p>
-        <p>You requested a password reset. Click the link below to reset your password:</p>
-        <p><a href="${resetLink}">Reset Password</a></p>
-        <p>This link will expire in 1 hour.</p>
-        <p>If you did not request this, please ignore this email.</p>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Split Screen Password Reset</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: Arial, Helvetica, sans-serif; background-color: #f4f4f4;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; margin: 20px auto; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+    <tr>
+      <td style="padding: 20px; text-align: center; background-color: #007bff; border-radius: 8px 8px 0 0;">
+        <h1 style="color: #ffffff; margin: 0; font-size: 24px;">Split Screen</h1>
+        <p style="color: #ffffff; margin: 5px 0 0; font-size: 14px;">Your Multi-Screen Productivity App</p>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding: 20px;">
+        <h2 style="color: #333333; font-size: 20px; margin: 0 0 10px;">Password Reset Request</h2>
+        <p style="color: #555555; font-size: 16px; line-height: 1.5; margin: 0 0 20px;">
+          Hello,
+        </p>
+        <p style="color: #555555; font-size: 16px; line-height: 1.5; margin: 0 0 20px;">
+          You requested a password reset for your Split Screen account. Click the button below to reset your password:
+        </p>
+        <table role="presentation" cellspacing="0" cellpadding="0" style="margin: 20px auto;">
+          <tr>
+            <td style="border-radius: 4px; background-color: #007bff;">
+              <a href="${resetLink}" style="display: inline-block; padding: 12px 24px; color: #ffffff; font-size: 16px; text-decoration: none; border-radius: 4px;">Reset Password</a>
+            </td>
+          </tr>
+        </table>
+        <p style="color: #555555; font-size: 16px; line-height: 1.5; margin: 0 0 20px;">
+          This link will expire in 1 hour for your security.
+        </p>
+        <p style="color: #555555; font-size: 16px; line-height: 1.5; margin: 0 0 20px;">
+          If you did not request this password reset, please ignore this email or contact our support team at <a href="mailto:contact@bayslope.com" style="color: #007bff; text-decoration: none;">contact@bayslope.com</a>.
+        </p>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding: 20px; text-align: center; background-color: #f4f4f4; border-radius: 0 0 8px 8px;">
+        <p style="color: #777777; font-size: 12px; margin: 0;">
+          © 2025 Split Screen. All rights reserved.<br>
+          <a href="https://bayslope.com" style="color: #007bff; text-decoration: none;">Visit our website</a>
+        </p>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
       `,
     };
-
     await sgMail.send(msg);
     console.log(`Password reset email sent to ${email}`);
     res.status(200).json({ message: 'Password reset link sent to your email' });
@@ -182,33 +226,25 @@ app.post('/api/forgot-password', async (req, res) => {
   }
 });
 
-// Reset Password endpoint
 app.post('/api/reset-password', async (req, res) => {
   const { email, token, newPassword } = req.body;
   if (!email || !token || !newPassword) {
     return res.status(400).json({ error: 'Email, token, and new password are required' });
   }
   try {
-    console.log('Received reset request - Email:', email, 'Token:', token); // Debug log
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    console.log('Decoded token payload:', decoded); // Debug log
-
     if (decoded.email !== email) {
       return res.status(400).json({ error: 'Email mismatch in token' });
     }
-
     const user = await User.findOne({ _id: decoded.userId, email });
     if (!user || !user.resetToken || user.resetToken !== token || (user.resetTokenExpiry && Date.now() > user.resetTokenExpiry)) {
       return res.status(400).json({ error: 'Invalid or expired reset token' });
     }
-
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     user.password = hashedPassword;
     user.resetToken = undefined;
     user.resetTokenExpiry = undefined;
     await user.save();
-    console.log('Password reset successful for email:', email);
-
     res.status(200).json({ message: 'Password reset successful' });
   } catch (err) {
     console.error('Reset password error:', err);
@@ -225,14 +261,14 @@ app.post('/api/google-login', async (req, res) => {
   if (!email || !googleId) {
     return res.status(400).json({ error: 'Email and Google ID are required' });
   }
+  let user = users.find(user => user.email === email);
+  if (!user) {
+    user = { email, googleId };
+    users.push(user);
+  } else if (user.googleId !== googleId) {
+    return res.status(401).json({ error: 'Invalid Google account' });
+  }
   try {
-    let user = await User.findOne({ email });
-    if (!user) {
-      user = new User({ email, googleId });
-      await user.save();
-    } else if (user.googleId && user.googleId !== googleId) {
-      return res.status(401).json({ error: 'Invalid Google account' });
-    }
     const token = jwt.sign({ email }, process.env.JWT_SECRET, { expiresIn: '1h' });
     res.json({ token });
   } catch (err) {
@@ -326,9 +362,11 @@ app.get('/api/proxy', async (req, res) => {
   };
 
   try {
+    // Determine token based on original URL
     const token = targetUrl.includes('worldwide.espacenet.com/patent') ? 2 : 1;
     console.log(`Proxy: Assigned token - ${token} (1=Google, 2=Espacenet)`);
 
+    // Convert Espacenet URL to Google Patents URL
     if (targetUrl.includes('worldwide.espacenet.com/patent')) {
       const publicationNumberMatch = targetUrl.match(/([A-Z]{2}\d+[A-Z]\d?)/);
       if (!publicationNumberMatch) {
@@ -555,7 +593,7 @@ app.get('/api/proxy', async (req, res) => {
         const patentData = {
           type: 'patent',
           source: 'google',
-          token: token,
+          token: token, // 1 for Google Patents, 2 for Espacenet
           data: {
             title,
             abstract,
@@ -602,7 +640,25 @@ app.get('/api/proxy', async (req, res) => {
   }
 });
 
+// New Contact Submission Endpoint
+app.post('/api/submit-contact', async (req, res) => {
+  const { firstName, lastName, email, phone, message } = req.body;
+  if (!firstName || !lastName || !email || !message) {
+    return res.status(400).json({ error: 'First Name, Last Name, Email, and Message are required' });
+  }
+  try {
+    const newContact = new Contact({ firstName, lastName, email, phone, message });
+    await newContact.save();
+    res.status(201).json({ message: 'Contact form submitted successfully' });
+  } catch (err) {
+    console.error('Contact submission error:', err);
+    res.status(500).json({ error: 'Failed to submit contact form' });
+  }
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
+module.exports = app;
