@@ -229,7 +229,7 @@ app.post('/api/forgot-password', async (req, res) => {
     <tr>
       <td style="padding: 20px; text-align: center; background-color: #f4f4f4; border-radius: 0 0 8px 8px;">
         <p style="color: #777777; font-size: 12px; margin: 0;">
-          © 2025 Split Screen. All rights reserved.<br>
+          © All rights reserved, BBS Private Limited, 2025<br>
           <a href="https://bayslope.com" style="color: #007bff; text-decoration: none;">Visit our website</a>
         </p>
       </td>
