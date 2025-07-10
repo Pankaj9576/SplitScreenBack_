@@ -150,24 +150,38 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// Forgot Password endpoint
 app.post('/api/forgot-password', async (req, res) => {
   const { email } = req.body;
   if (!email) {
     return res.status(400).json({ error: 'Email is required' });
   }
+
   try {
+    // Verify MongoDB connection
+    if (mongoose.connection.readyState !== 1) {
+      throw new Error('MongoDB is not connected');
+    }
+
+    // Find user
     const user = await User.findOne({ email });
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
+
+    // Generate reset token
     const resetToken = jwt.sign({ userId: user._id, email }, process.env.JWT_SECRET, { expiresIn: '1h' });
-    user.resetToken = resetToken;
-    user.resetTokenExpiry = Date.now() + 3600000;
-    await user.save();
-    const resetLink = `${process.env.NODE_ENV === 'production' 
-      ? 'https://split-screen-inky.vercel.app' 
-      : 'http://localhost:3000'}/reset-password?token=${encodeURIComponent(resetToken)}&email=${encodeURIComponent(email)}`;
+
+    // Update user with reset token and expiry
+    await User.findOneAndUpdate(
+      { email },
+      { resetToken, resetTokenExpiry: Date.now() + 3600000 },
+      { runValidators: false } // Bypass schema validation
+    );
+
+    // Construct reset link
+    const resetLink = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/reset-password?token=${encodeURIComponent(resetToken)}&email=${encodeURIComponent(email)}`;
+
+    // Send email via SendGrid
     const msg = {
       to: email,
       from: process.env.FROM_EMAIL,
@@ -225,15 +239,20 @@ app.post('/api/forgot-password', async (req, res) => {
 </html>
       `,
     };
+
     await sgMail.send(msg);
     console.log(`Password reset email sent to ${email}`);
     res.status(200).json({ message: 'Password reset link sent to your email' });
   } catch (err) {
     console.error('Forgot password error:', err);
-    if (err.response) {
+    if (err.response && err.response.body) {
       console.error('SendGrid response:', err.response.body);
+      return res.status(500).json({ error: `Failed to send reset email: ${err.response.body.errors[0].message || 'SendGrid error'}` });
     }
-    res.status(500).json({ error: 'Failed to send reset email' });
+    if (err.message.includes('MongoDB')) {
+      return res.status(500).json({ error: 'Database connection error' });
+    }
+    return res.status(500).json({ error: `Failed to send reset email: ${err.message}` });
   }
 });
 
