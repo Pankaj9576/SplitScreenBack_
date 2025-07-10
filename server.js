@@ -262,47 +262,26 @@ app.post('/api/reset-password', async (req, res) => {
     return res.status(400).json({ error: 'Email, token, and new password are required' });
   }
   try {
-    // Verify MongoDB connection
-    if (mongoose.connection.readyState !== 1) {
-      throw new Error('MongoDB is not connected');
-    }
-
-    // Verify token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     if (decoded.email !== email) {
       return res.status(400).json({ error: 'Email mismatch in token' });
     }
-
-    // Find user and validate token
     const user = await User.findOne({ _id: decoded.userId, email });
     if (!user || !user.resetToken || user.resetToken !== token || (user.resetTokenExpiry && Date.now() > user.resetTokenExpiry)) {
       return res.status(400).json({ error: 'Invalid or expired reset token' });
     }
-
-    // Hash new password
     const hashedPassword = await bcrypt.hash(newPassword, 10);
-
-    // Update user with new password and clear reset token
-    await User.findOneAndUpdate(
-      { _id: decoded.userId, email },
-      {
-        password: hashedPassword,
-        resetToken: null,
-        resetTokenExpiry: null,
-      },
-      { runValidators: false } // Bypass schema validation
-    );
-
+    user.password = hashedPassword;
+    user.resetToken = undefined;
+    user.resetTokenExpiry = undefined;
+    await user.save();
     res.status(200).json({ message: 'Password reset successful' });
   } catch (err) {
     console.error('Reset password error:', err);
     if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
       return res.status(400).json({ error: 'Invalid or expired reset token' });
     }
-    if (err.message.includes('MongoDB')) {
-      return res.status(500).json({ error: 'Database connection error' });
-    }
-    return res.status(500).json({ error: `Server error: ${err.message}` });
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
