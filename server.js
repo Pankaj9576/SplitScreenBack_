@@ -73,7 +73,7 @@ const User = mongoose.model('User', userSchema);
 
 // CORS middleware
 app.use(cors({
-  origin: ['https://frontendsplitscreen.vercel.app', 'http://localhost:3000', 'https://split-screen-inky.vercel.app'],
+  origin: ['https://frontendsplitscreen.vercel.app', 'https://split-screen-inky.vercel.app'],
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
@@ -179,7 +179,7 @@ app.post('/api/forgot-password', async (req, res) => {
     );
 
     // Construct reset link
-    const resetLink = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/reset-password?token=${encodeURIComponent(resetToken)}&email=${encodeURIComponent(email)}`;
+    const resetLink = `${process.env.FRONTEND_URL || 'https://split-screen-inky.vercel.app'}/reset-password?token=${encodeURIComponent(resetToken)}&email=${encodeURIComponent(email)}`;
 
     // Send email via SendGrid
     const msg = {
